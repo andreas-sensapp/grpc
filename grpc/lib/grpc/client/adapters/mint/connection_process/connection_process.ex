@@ -474,6 +474,14 @@ if Code.ensure_loaded?(Mint.HTTP) do
     end
 
     defp attempt_reconnect(state) do
+      # Release the connection being replaced before dialing its successor. A
+      # reconnect triggered by a GOAWAY finds it in Mint's `:goaway` state with the
+      # socket still open, and nothing else ever closes it: once `state.conn` is
+      # overwritten, this process ignores the old socket's messages as `:unknown`
+      # without re-arming `active: :once`, so a later server close is never read
+      # and the TLS connection process lives for as long as this one does. Closing
+      # an already-closed connection is a no-op, so retries pass through here too.
+      _ = Mint.HTTP.close(state.conn)
       next_attempt = state.retry_attempt + 1
 
       Logger.info(

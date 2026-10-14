@@ -437,6 +437,25 @@ defmodule GRPC.Client.Adapters.Mint.ConnectionProcessTest do
       assert new_state.retry_attempt == 0
       refute_received {:elixir_grpc, :connection_down, _pid}
     end
+
+    test "closes the replaced connection's socket when a GOAWAY triggers the reconnect", %{
+      state: state
+    } do
+      socket = state.conn.socket
+      # A server SETTINGS frame first, so the copied state is past Mint's handshake
+      # whichever side of it `:sys.get_state/1` caught, then GOAWAY (NO_ERROR, last
+      # stream 0) — which leaves the socket open, unlike a mocked `:tcp_closed`.
+      settings = <<0::24, 4::8, 0::8, 0::32>>
+      goaway = <<8::24, 7::8, 0::8, 0::32, 0::32, 0::32>>
+
+      assert {:noreply, new_state} =
+               ConnectionProcess.handle_info({:tcp, socket, settings <> goaway}, state)
+
+      assert new_state.conn.socket != socket
+      # Left open, the old socket is read by nobody once `state.conn` moves on, so
+      # its eventual close is never seen and it is held for the life of the process.
+      assert Port.info(socket) == nil
+    end
   end
 
   describe "handle_info - connection_closed - with retry - exhausted" do
